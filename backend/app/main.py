@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.api.documents import router as documents_router
 from app.api.projects import router as projects_router
+from app.api.search import router as search_router
 
 app = FastAPI(
     title="Project Delivery Intelligence Agent",
@@ -10,6 +11,7 @@ app = FastAPI(
 
 app.include_router(projects_router)
 app.include_router(documents_router)
+app.include_router(search_router)
 
 
 @app.get("/health")
