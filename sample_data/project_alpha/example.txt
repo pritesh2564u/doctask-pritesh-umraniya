@@ -1,0 +1,27 @@
+Project Alpha
+Project Delivery Status Report
+
+Project Owner: Pritesh
+Project Start Date: August 1, 2026
+Target Completion Date: October 15, 2026
+
+Milestones
+API Development is completed.
+Frontend Development is currently in progress.
+Database Integration is expected to complete by September 15, 2026.
+
+Risks
+The API integration may be delayed because of third-party dependencies.
+The database integration currently has no assigned owner.
+
+Actions
+Complete frontend development by September 10, 2026.
+Assign an owner to the database integration risk.
+Review third-party API dependencies during the next project meeting.
+
+Budget
+The approved project budget is $50,000.
+Current spending is $32,000.
+
+Overall Status
+The project is currently at risk because of the database integration dependency and the unassigned risk owner.
