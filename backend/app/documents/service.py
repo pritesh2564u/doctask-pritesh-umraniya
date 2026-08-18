@@ -11,6 +11,10 @@ from app.documents.models import ParsedDocument
 from app.documents.registry import ParserRegistry
 from app.models.chunk import DocumentChunk
 from app.models.document import Document
+from app.retrieval.embeddings import (
+    DeterministicEmbeddingProvider,
+    EmbeddingProvider,
+)
 
 
 class DocumentService:
@@ -19,10 +23,15 @@ class DocumentService:
         db: AsyncSession,
         parser_registry: ParserRegistry,
         storage_dir: Path,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.db = db
         self.parser_registry = parser_registry
         self.storage_dir = storage_dir
+        self.embedding_provider = (
+            embedding_provider
+            or DeterministicEmbeddingProvider(dimensions=1536)
+        )
 
     async def ingest(
         self,
@@ -35,7 +44,6 @@ class DocumentService:
         content = source_file.read_bytes()
         content_hash = hashlib.sha256(content).hexdigest()
 
-        # Check for duplicate document
         result = await self.db.execute(
             select(Document).where(
                 Document.project_id == project_id,
@@ -52,7 +60,10 @@ class DocumentService:
             return existing_document, parsed_document
 
         # Store original document
-        destination_dir = self.storage_dir / str(project_id)
+        destination_dir = (
+            self.storage_dir / str(project_id)
+        )
+
         destination_dir.mkdir(
             parents=True,
             exist_ok=True,
@@ -71,7 +82,7 @@ class DocumentService:
                 destination,
             )
 
-        # Create document
+        # Create document record
         document = Document(
             project_id=project_id,
             filename=filename,
@@ -82,13 +93,29 @@ class DocumentService:
 
         self.db.add(document)
 
-        # Flush so document.id is available before creating chunks
         await self.db.flush()
 
         # Create chunks
-        chunks = create_chunks(parsed_document.blocks)
+        chunks = create_chunks(
+            parsed_document.blocks
+        )
 
-        for chunk_data in chunks:
+        # Generate embeddings for all chunks
+        texts = [
+            chunk["text"]
+            for chunk in chunks
+        ]
+
+        embeddings = await self.embedding_provider.embed_many(
+            texts
+        )
+
+        # Store chunks + embeddings
+        for chunk_data, embedding in zip(
+            chunks,
+            embeddings,
+            strict=True,
+        ):
             chunk = DocumentChunk(
                 document_id=document.id,
                 chunk_index=chunk_data["chunk_index"],
@@ -99,6 +126,7 @@ class DocumentService:
                 end_paragraph=chunk_data["end_paragraph"],
                 start_line=chunk_data["start_line"],
                 end_line=chunk_data["end_line"],
+                embedding=embedding,
             )
 
             self.db.add(chunk)

@@ -7,6 +7,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
+from pgvector.sqlalchemy import Vector
+
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
@@ -61,6 +63,11 @@ class DocumentChunk(Base):
 
     end_line: Mapped[int | None] = mapped_column(
         Integer,
+        nullable=True,
+    )
+
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(1536),
         nullable=True,
     )
 
