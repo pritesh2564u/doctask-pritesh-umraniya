@@ -6,8 +6,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.documents.chunker import create_chunks
 from app.documents.models import ParsedDocument
 from app.documents.registry import ParserRegistry
+from app.models.chunk import DocumentChunk
 from app.models.document import Document
 
 
@@ -30,10 +32,7 @@ class DocumentService:
         source_file: Path,
     ) -> tuple[Document, ParsedDocument]:
 
-        # Read file
         content = source_file.read_bytes()
-
-        # Calculate SHA-256
         content_hash = hashlib.sha256(content).hexdigest()
 
         # Check for duplicate document
@@ -46,26 +45,19 @@ class DocumentService:
 
         existing_document = result.scalar_one_or_none()
 
-        if existing_document is not None:
-            parser = self.parser_registry.get_parser(source_file)
-            parsed_document = parser.parse(source_file)
-
-            return existing_document, parsed_document
-
-        # Find appropriate parser
         parser = self.parser_registry.get_parser(source_file)
-
-        # Parse document
         parsed_document = parser.parse(source_file)
 
-        # Create project-specific storage directory
+        if existing_document is not None:
+            return existing_document, parsed_document
+
+        # Store original document
         destination_dir = self.storage_dir / str(project_id)
         destination_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        # Use content hash as stored filename
         extension = source_file.suffix.lower()
 
         destination = (
@@ -73,14 +65,13 @@ class DocumentService:
             / f"{content_hash}{extension}"
         )
 
-        # Store original document
         if not destination.exists():
             shutil.copy2(
                 source_file,
                 destination,
             )
 
-        # Create database record
+        # Create document
         document = Document(
             project_id=project_id,
             filename=filename,
@@ -90,6 +81,27 @@ class DocumentService:
         )
 
         self.db.add(document)
+
+        # Flush so document.id is available before creating chunks
+        await self.db.flush()
+
+        # Create chunks
+        chunks = create_chunks(parsed_document.blocks)
+
+        for chunk_data in chunks:
+            chunk = DocumentChunk(
+                document_id=document.id,
+                chunk_index=chunk_data["chunk_index"],
+                text=chunk_data["text"],
+                start_page=chunk_data["start_page"],
+                end_page=chunk_data["end_page"],
+                start_paragraph=chunk_data["start_paragraph"],
+                end_paragraph=chunk_data["end_paragraph"],
+                start_line=chunk_data["start_line"],
+                end_line=chunk_data["end_line"],
+            )
+
+            self.db.add(chunk)
 
         await self.db.commit()
         await self.db.refresh(document)
