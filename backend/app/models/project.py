@@ -1,15 +1,15 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 
-class Run(Base):
-    __tablename__ = "runs"
+class Project(Base):
+    __tablename__ = "projects"
 
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -17,21 +17,10 @@ class Run(Base):
         default=uuid4,
     )
 
-    project_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    status: Mapped[str] = mapped_column(
-        String(50),
-        nullable=False,
-        default="pending",
-    )
-
-    current_stage: Mapped[str | None] = mapped_column(
-        String(100),
+    description: Mapped[str | None] = mapped_column(
+        Text,
         nullable=True,
     )
 
