@@ -132,6 +132,7 @@ class StageHandler:
         ]
 
         for chunk in chunks:
+
             text_lower = chunk.text.lower()
 
             matched_keywords = [
@@ -143,15 +144,29 @@ class StageHandler:
             if not matched_keywords:
                 continue
 
-            finding = Finding(
-                run_id=run_id,
-                chunk_id=chunk.id,
-                title="Potential delivery risk",
-                description=chunk.text,
-                status="pending",
+            # Check whether this finding already exists.
+            existing_result = await db.execute(
+                select(Finding).where(
+                    Finding.run_id == run_id,
+                    Finding.chunk_id == chunk.id,
+                )
             )
 
-            db.add(finding)
+            existing_finding = (
+                existing_result.scalar_one_or_none()
+            )
+
+            if existing_finding is None:
+
+                finding = Finding(
+                    run_id=run_id,
+                    chunk_id=chunk.id,
+                    title="Potential delivery risk",
+                    description=chunk.text,
+                    status="pending",
+                )
+
+                db.add(finding)
 
             findings.append(
                 {

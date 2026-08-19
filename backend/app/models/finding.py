@@ -7,9 +7,26 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+
 
 class Finding(Base):
     __tablename__ = "findings"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "chunk_id",
+            name="uq_findings_run_chunk",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
