@@ -3,18 +3,28 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.agent.stage_handlers import StageHandler
-from app.db.session import AsyncSessionLocal
+from app.core.config import settings
 from app.models.chunk import DocumentChunk
 from app.models.document import Document
 from app.models.finding import Finding
 from app.models.project import Project
 from app.models.run import Run
 
+from app.agent.llm_service import AnalysisService
+from tests.agent.fake_llm import FakeAnalysisModel
+
 
 @pytest.mark.asyncio
-async def test_two_runs_analyze_concurrently_are_isolated(db_session):
+async def test_two_runs_analyze_concurrently_are_isolated(
+    db_session: AsyncSession,
+):
     # --------------------------------------------------
     # Create project
     # --------------------------------------------------
@@ -87,14 +97,32 @@ async def test_two_runs_analyze_concurrently_are_isolated(db_session):
     await db_session.commit()
 
     # --------------------------------------------------
-    # Execute ANALYZE concurrently.
+    # Create a TEST-LOCAL engine.
     #
-    # Each concurrent execution gets its own DB session.
+    # Do not use app.db.session.AsyncSessionLocal here.
+    # Each concurrent task gets its own AsyncSession.
     # --------------------------------------------------
 
+    test_engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+    )
+
+    TestSessionLocal = async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
     async def analyze_run(run_id):
-        async with AsyncSessionLocal() as session:
-            handler = StageHandler()
+        async with TestSessionLocal() as session:
+            analysis_service = AnalysisService(
+                model=FakeAnalysisModel(),
+            )
+
+            handler = StageHandler(
+                analysis_service=analysis_service,
+            )
 
             return await handler.analyze(
                 db=session,
@@ -102,76 +130,103 @@ async def test_two_runs_analyze_concurrently_are_isolated(db_session):
                 run_id=run_id,
             )
 
-    result_a, result_b = await asyncio.gather(
-        analyze_run(run_a.id),
-        analyze_run(run_b.id),
-    )
+    try:
+        # --------------------------------------------------
+        # Execute both runs concurrently.
+        # --------------------------------------------------
 
-    # Both analyses should complete.
-    assert result_a.decision.value == "complete"
-    assert result_b.decision.value == "complete"
-
-    # --------------------------------------------------
-    # Verify Run A findings
-    # --------------------------------------------------
-
-    result = await db_session.execute(
-        select(Finding).where(
-            Finding.run_id == run_a.id
+        result_a, result_b = await asyncio.gather(
+            analyze_run(run_a.id),
+            analyze_run(run_b.id),
         )
-    )
 
-    findings_a = result.scalars().all()
+        # --------------------------------------------------
+        # Both analyses should complete.
+        # --------------------------------------------------
 
-    # --------------------------------------------------
-    # Verify Run B findings
-    # --------------------------------------------------
+        assert result_a.decision.value == "complete"
+        assert result_b.decision.value == "complete"
 
-    result = await db_session.execute(
-        select(Finding).where(
-            Finding.run_id == run_b.id
+        # --------------------------------------------------
+        # Verify Run A findings.
+        # --------------------------------------------------
+
+        result = await db_session.execute(
+            select(Finding).where(
+                Finding.run_id == run_a.id
+            )
         )
-    )
 
-    findings_b = result.scalars().all()
+        findings_a = result.scalars().all()
 
-    # --------------------------------------------------
-    # Each run should have its own findings.
-    # --------------------------------------------------
+        # --------------------------------------------------
+        # Verify Run B findings.
+        # --------------------------------------------------
 
-    assert len(findings_a) == 2
-    assert len(findings_b) == 2
+        result = await db_session.execute(
+            select(Finding).where(
+                Finding.run_id == run_b.id
+            )
+        )
 
-    assert all(
-        finding.run_id == run_a.id
-        for finding in findings_a
-    )
+        findings_b = result.scalars().all()
 
-    assert all(
-        finding.run_id == run_b.id
-        for finding in findings_b
-    )
+        # --------------------------------------------------
+        # Each run should have its own findings.
+        # --------------------------------------------------
 
-    chunk_ids_a = {
-        finding.chunk_id
-        for finding in findings_a
-    }
+        assert len(findings_a) == 2
+        assert len(findings_b) == 2
 
-    chunk_ids_b = {
-        finding.chunk_id
-        for finding in findings_b
-    }
+        # --------------------------------------------------
+        # Verify finding ownership.
+        # --------------------------------------------------
 
-    # Same project → same source chunks.
-    assert chunk_ids_a == chunk_ids_b
+        assert all(
+            finding.run_id == run_a.id
+            for finding in findings_a
+        )
 
-    # Different runs → different finding ownership.
-    assert all(
-        finding.run_id != run_b.id
-        for finding in findings_a
-    )
+        assert all(
+            finding.run_id == run_b.id
+            for finding in findings_b
+        )
 
-    assert all(
-        finding.run_id != run_a.id
-        for finding in findings_b
-    )
+        # --------------------------------------------------
+        # Both runs analyze the same project's chunks.
+        # --------------------------------------------------
+
+        chunk_ids_a = {
+            finding.chunk_id
+            for finding in findings_a
+        }
+
+        chunk_ids_b = {
+            finding.chunk_id
+            for finding in findings_b
+        }
+
+        assert chunk_ids_a == chunk_ids_b
+
+        # --------------------------------------------------
+        # A finding from one run must never belong to
+        # the other run.
+        # --------------------------------------------------
+
+        assert all(
+            finding.run_id != run_b.id
+            for finding in findings_a
+        )
+
+        assert all(
+            finding.run_id != run_a.id
+            for finding in findings_b
+        )
+
+    finally:
+        # --------------------------------------------------
+        # Dispose the engine while the current event loop
+        # is still alive.
+        # --------------------------------------------------
+
+        await test_engine.dispose()

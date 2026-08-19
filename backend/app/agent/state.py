@@ -13,4 +13,6 @@ class AgentState(TypedDict, total=False):
 
     data: dict
 
+    workflow_complete: bool
+
     error: str | None

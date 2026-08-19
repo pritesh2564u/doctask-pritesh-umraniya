@@ -37,4 +37,6 @@ typing_extensions==4.16.0
 tzdata==2026.3
 uvicorn==0.52.3
 watchfiles==1.2.0
-websockets==17.0.1
+websockets==15.0.1
+langgraph==1.2.11
+langchain-groq==1.1.3

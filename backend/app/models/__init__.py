@@ -5,6 +5,7 @@ from app.models.run import Run
 from app.models.stage import StageRun
 from app.models.evidence import Evidence
 from app.models.finding import Finding
+from app.models.reconciliation import ReconciliationResult
 
 __all__ = [
     "Project",
@@ -14,4 +15,5 @@ __all__ = [
     "StageRun",
     "Evidence",
     "Finding",
+    "ReconciliationResult",
 ]

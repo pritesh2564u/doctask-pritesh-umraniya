@@ -67,3 +67,49 @@ def test_only_approved_findings_are_committed():
 
     assert len(approved) == 2
     assert len(rejected) == 1
+
+@pytest.mark.asyncio
+async def test_open_reconciliation_blocks_commit(db_session):
+    from uuid import uuid4
+
+    from app.agent.stage_handlers import StageHandler
+    from app.models.project import Project
+    from app.models.reconciliation import ReconciliationResult
+    from app.models.run import Run
+
+    project = Project(
+        name=f"Commit Conflict Test {uuid4()}",
+    )
+
+    db_session.add(project)
+    await db_session.flush()
+
+    run = Run(
+        project_id=project.id,
+        status="running",
+        current_stage="commit",
+    )
+
+    db_session.add(run)
+    await db_session.flush()
+
+    conflict = ReconciliationResult(
+        run_id=run.id,
+        conflict_type="status_conflict",
+        description="Conflicting status evidence.",
+        status="open",
+    )
+
+    db_session.add(conflict)
+    await db_session.commit()
+
+    handler = StageHandler()
+
+    result = await handler.commit(
+        db=db_session,
+        project_id=project.id,
+        run_id=run.id,
+    )
+
+    assert result.decision == StageDecision.ESCALATE
+    assert result.data["conflict_count"] == 1

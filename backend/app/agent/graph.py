@@ -4,36 +4,42 @@ from app.agent.nodes import execute_stage
 from app.agent.state import AgentState
 
 
-def route_after_stage(
-    state: AgentState,
-):
+def route_after_stage(state: AgentState):
+    if state.get("workflow_complete") is True:
+        return END
+
     decision = state.get("decision")
-
-    if decision == "escalate":
-        return END
-
-    if decision == "fail":
-        return END
-
-    if decision == "retry":
-        return "execute_stage"
 
     if decision in {
         "complete",
         "skip",
+        "retry",
     }:
         return "execute_stage"
 
     return END
 
 
-def build_graph():
+def build_graph(session_factory=None):
+
+    if session_factory is None:
+        from app.db.session import AsyncSessionLocal
+
+        session_factory = AsyncSessionLocal
+
+    async def execute_stage_node(
+        state: AgentState,
+    ):
+        return await execute_stage(
+            state,
+            session_factory=session_factory,
+        )
 
     graph = StateGraph(AgentState)
 
     graph.add_node(
         "execute_stage",
-        execute_stage,
+        execute_stage_node,
     )
 
     graph.add_edge(

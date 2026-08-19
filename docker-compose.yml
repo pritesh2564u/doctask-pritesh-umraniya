@@ -3,14 +3,45 @@ services:
         image: pgvector/pgvector:pg16
         container_name: doctask-postgres
         restart: unless-stopped
+
         environment:
             POSTGRES_DB: doctask
             POSTGRES_USER: postgres
             POSTGRES_PASSWORD: postgres
+
         ports:
             - "5433:5432"
+
         volumes:
             - postgres_data:/var/lib/postgresql/data
+            - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d doctask"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 5s
+
+    backend:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+
+        container_name: doctask-backend
+        restart: unless-stopped
+
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+        environment:
+            DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/doctask
+            GROQ_API_KEY: ${GROQ_API_KEY:-}
+            GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+
+        ports:
+            - "8000:8000"
 
 volumes:
     postgres_data:

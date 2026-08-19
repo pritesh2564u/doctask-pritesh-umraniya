@@ -10,9 +10,9 @@ from app.db.session import get_db
 from app.models.project import Project
 from app.models.run import Run
 from app.models.stage import StageRun
+from app.agent.graph import build_graph
 from app.agent.decisions import StageDecision
-from app.agent.executor import StageResult, WorkflowExecutor
-from app.agent.stages import StageName
+from app.agent.stage_handlers import StageHandler
 
 router = APIRouter(
     prefix="/projects",
@@ -21,7 +21,7 @@ router = APIRouter(
 
 run_service = RunService()
 
-workflow_executor = WorkflowExecutor()
+workflow_graph = build_graph()
 
 @router.post("/{project_id}/runs")
 async def create_run(
@@ -134,14 +134,81 @@ async def execute_run(
             detail="Run not found",
         )
 
-    workflow_result = await workflow_executor.execute_next(
-        db=db,
-        run_id=run_id,
+    # --------------------------------------------------
+    # Execute the complete LangGraph workflow.
+    #
+    # The graph itself determines whether to continue
+    # to another stage or stop at escalation/failure.
+    # --------------------------------------------------
+
+    workflow_result = await workflow_graph.ainvoke(
+        {
+            "run_id": run_id,
+            "project_id": project_id,
+        }
     )
 
     return {
         "run_id": str(run_id),
-        "decision": workflow_result.decision,
-        "message": workflow_result.message,
-        "data": workflow_result.data,
+        "decision": workflow_result["decision"],
+        "message": workflow_result["message"],
+        "data": workflow_result.get("data", {}),
+    }
+
+@router.post(
+    "/{project_id}/runs/{run_id}/reconciliation/{reconciliation_id}/resolve"
+)
+async def resolve_reconciliation(
+    project_id: UUID,
+    run_id: UUID,
+    reconciliation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    # --------------------------------------------------
+    # Verify that the run belongs to this project.
+    # --------------------------------------------------
+
+    result = await db.execute(
+        select(Run).where(
+            Run.id == run_id,
+            Run.project_id == project_id,
+        )
+    )
+
+    run = result.scalar_one_or_none()
+
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Run not found",
+        )
+
+    # --------------------------------------------------
+    # Resolve the reconciliation result.
+    #
+    # The service also verifies reconciliation_id belongs
+    # to this run, so another run cannot resolve it.
+    # --------------------------------------------------
+
+    handler = StageHandler()
+
+    result = await handler.resolve_reconciliation(
+        db=db,
+        run_id=run_id,
+        reconciliation_id=reconciliation_id,
+    )
+
+    if result.decision == StageDecision.FAIL:
+        raise HTTPException(
+            status_code=404,
+            detail=result.message,
+        )
+
+    return {
+        "run_id": str(run_id),
+        "reconciliation_id": str(
+            reconciliation_id
+        ),
+        "status": result.data["status"],
+        "message": result.message,
     }

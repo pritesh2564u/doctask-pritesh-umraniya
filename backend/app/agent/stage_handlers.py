@@ -9,6 +9,8 @@ from app.agent.stages import StageName
 from app.models.chunk import DocumentChunk
 from app.models.document import Document
 from app.models.finding import Finding
+from app.models.reconciliation import ReconciliationResult
+from app.agent.llm_service import AnalysisService
 
 @dataclass
 class StageResult:
@@ -18,13 +20,11 @@ class StageResult:
 
 
 class StageHandler:
-    """
-    Implements the actual behavior of each agent stage.
-
-    The handlers intentionally do not call an LLM yet.
-    They operate on persisted document/evidence data so the
-    workflow remains testable without an API key.
-    """
+    def __init__(
+        self,
+        analysis_service: AnalysisService | None = None,
+    ) -> None:
+        self.analysis_service = analysis_service
 
     async def ingest(
         self,
@@ -98,6 +98,12 @@ class StageHandler:
         run_id: UUID,
     ) -> StageResult:
 
+        if self.analysis_service is None:
+            return StageResult(
+                decision=StageDecision.FAIL,
+                message="Analysis service is not configured.",
+            )
+
         result = await db.execute(
             select(DocumentChunk)
             .join(
@@ -119,32 +125,20 @@ class StageHandler:
 
         findings = []
 
-        risk_keywords = [
-            "risk",
-            "at risk",
-            "delay",
-            "delayed",
-            "blocked",
-            "blocker",
-            "overdue",
-            "issue",
-            "critical",
-        ]
-
         for chunk in chunks:
 
-            text_lower = chunk.text.lower()
+            analysis = await self.analysis_service.analyze(
+                chunk.text
+            )
 
-            matched_keywords = [
-                keyword
-                for keyword in risk_keywords
-                if keyword in text_lower
-            ]
-
-            if not matched_keywords:
+            if not analysis.is_risk:
                 continue
 
-            # Check whether this finding already exists.
+            # --------------------------------------------------
+            # Preserve run_id + chunk_id ownership in our code.
+            # The LLM never controls these values.
+            # --------------------------------------------------
+
             existing_result = await db.execute(
                 select(Finding).where(
                     Finding.run_id == run_id,
@@ -157,12 +151,11 @@ class StageHandler:
             )
 
             if existing_finding is None:
-
                 finding = Finding(
                     run_id=run_id,
                     chunk_id=chunk.id,
-                    title="Potential delivery risk",
-                    description=chunk.text,
+                    title=analysis.title,
+                    description=analysis.description,
                     status="pending",
                 )
 
@@ -171,8 +164,8 @@ class StageHandler:
             findings.append(
                 {
                     "chunk_id": str(chunk.id),
-                    "text": chunk.text,
-                    "matched_keywords": matched_keywords,
+                    "title": analysis.title,
+                    "description": analysis.description,
                     "source": {
                         "start_page": chunk.start_page,
                         "end_page": chunk.end_page,
@@ -197,17 +190,20 @@ class StageHandler:
 
         return StageResult(
             decision=StageDecision.COMPLETE,
-            message=f"Identified {len(findings)} potential finding(s).",
+            message=(
+                f"Identified {len(findings)} potential finding(s)."
+            ),
             data={
                 "findings": findings,
                 "finding_count": len(findings),
             },
         )
-    
+
     async def reconcile(
         self,
         db: AsyncSession,
         project_id: UUID,
+        run_id: UUID,
     ) -> StageResult:
 
         result = await db.execute(
@@ -217,7 +213,7 @@ class StageHandler:
                 Document.id == DocumentChunk.document_id,
             )
             .where(
-                Document.project_id == project_id
+                Document.project_id == project_id,
             )
         )
 
@@ -227,45 +223,119 @@ class StageHandler:
             return StageResult(
                 decision=StageDecision.SKIP,
                 message="No evidence requires reconciliation.",
+                data={
+                    "conflicts": [],
+                    "conflict_count": 0,
+                },
             )
 
-        # Conflict detection will be expanded later.
-        # For now, identify documents that contain
-        # potentially conflicting status terminology.
-        statuses = []
+        observations: dict[str, list[str]] = {
+            "completed": [],
+            "in_progress": [],
+            "at_risk": [],
+        }
 
         for chunk in chunks:
             text = chunk.text.lower()
 
             if "completed" in text:
-                statuses.append(
-                    {
-                        "chunk_id": str(chunk.id),
-                        "status": "completed",
-                    }
+                observations["completed"].append(
+                    str(chunk.id)
                 )
 
             if "in progress" in text:
-                statuses.append(
-                    {
-                        "chunk_id": str(chunk.id),
-                        "status": "in_progress",
-                    }
+                observations["in_progress"].append(
+                    str(chunk.id)
                 )
 
             if "at risk" in text:
-                statuses.append(
-                    {
-                        "chunk_id": str(chunk.id),
-                        "status": "at_risk",
-                    }
+                observations["at_risk"].append(
+                    str(chunk.id)
                 )
+
+        conflicts = []
+
+        # --------------------------------------------------
+        # completed vs in_progress
+        # --------------------------------------------------
+
+        if (
+            observations["completed"]
+            and observations["in_progress"]
+        ):
+            conflicts.append(
+                {
+                    "statuses": [
+                        "completed",
+                        "in_progress",
+                    ],
+                    "chunk_ids": (
+                        observations["completed"]
+                        + observations["in_progress"]
+                    ),
+                }
+            )
+
+        # --------------------------------------------------
+        # completed vs at_risk
+        # --------------------------------------------------
+
+        if (
+            observations["completed"]
+            and observations["at_risk"]
+        ):
+            conflicts.append(
+                {
+                    "statuses": [
+                        "completed",
+                        "at_risk",
+                    ],
+                    "chunk_ids": (
+                        observations["completed"]
+                        + observations["at_risk"]
+                    ),
+                }
+            )
+
+        for conflict in conflicts:
+            conflict_type = "status_conflict"
+
+            description = (
+                "Conflicting project status evidence detected: "
+                f"{', '.join(conflict['statuses'])}. "
+                f"Affected chunks: "
+                f"{', '.join(conflict['chunk_ids'])}."
+            )
+
+            existing = await db.execute(
+                select(ReconciliationResult).where(
+                    ReconciliationResult.run_id == run_id,
+                    ReconciliationResult.conflict_type == conflict_type,
+                    ReconciliationResult.description == description,
+                )
+            )
+
+            if existing.scalar_one_or_none() is None:
+                db.add(
+                    ReconciliationResult(
+                        run_id=run_id,
+                        conflict_type=conflict_type,
+                        description=description,
+                        status="open",
+                    )
+                )
+
+        await db.commit()
 
         return StageResult(
             decision=StageDecision.COMPLETE,
-            message="Evidence reconciliation completed.",
+            message=(
+                f"Evidence reconciliation completed. "
+                f"Found {len(conflicts)} conflict(s)."
+            ),
             data={
-                "status_observations": statuses,
+                "conflicts": conflicts,
+                "conflict_count": len(conflicts),
             },
         )
 
@@ -275,6 +345,47 @@ class StageHandler:
         project_id: UUID,
         run_id: UUID,
     ) -> StageResult:
+
+        # --------------------------------------------------
+        # Check unresolved reconciliation conflicts first.
+        # --------------------------------------------------
+
+        result = await db.execute(
+            select(ReconciliationResult).where(
+                ReconciliationResult.run_id == run_id,
+                ReconciliationResult.status == "open",
+            )
+        )
+
+        reconciliation_results = result.scalars().all()
+
+        if reconciliation_results:
+            return StageResult(
+                decision=StageDecision.ESCALATE,
+                message=(
+                    f"{len(reconciliation_results)} "
+                    "reconciliation conflict(s) require "
+                    "resolution before review can continue."
+                ),
+                data={
+                    "conflict_count": len(
+                        reconciliation_results
+                    ),
+                    "conflicts": [
+                        {
+                            "id": str(item.id),
+                            "conflict_type": item.conflict_type,
+                            "description": item.description,
+                            "status": item.status,
+                        }
+                        for item in reconciliation_results
+                    ],
+                },
+            )
+
+        # --------------------------------------------------
+        # Load findings belonging ONLY to this run.
+        # --------------------------------------------------
 
         result = await db.execute(
             select(Finding).where(
@@ -311,7 +422,10 @@ class StageHandler:
             if finding.review_decision == "reject"
         ]
 
+        # --------------------------------------------------
         # Human gate is still open.
+        # --------------------------------------------------
+
         if pending:
             return StageResult(
                 decision=StageDecision.ESCALATE,
@@ -344,6 +458,39 @@ class StageHandler:
         project_id: UUID,
         run_id: UUID,
     ) -> StageResult:
+
+        # --------------------------------------------------
+        # Unresolved reconciliation conflicts block commit.
+        # --------------------------------------------------
+
+        result = await db.execute(
+            select(ReconciliationResult).where(
+                ReconciliationResult.run_id == run_id,
+                ReconciliationResult.status == "open",
+            )
+        )
+
+        open_conflicts = result.scalars().all()
+
+        if open_conflicts:
+            return StageResult(
+                decision=StageDecision.ESCALATE,
+                message=(
+                    "Commit blocked because unresolved "
+                    "reconciliation conflict(s) remain."
+                ),
+                data={
+                    "conflict_count": len(open_conflicts),
+                    "conflicts": [
+                        {
+                            "id": str(conflict.id),
+                            "conflict_type": conflict.conflict_type,
+                            "description": conflict.description,
+                        }
+                        for conflict in open_conflicts
+                    ],
+                },
+            )
 
         result = await db.execute(
             select(Finding).where(
@@ -445,6 +592,7 @@ class StageHandler:
             return await self.reconcile(
                 db,
                 project_id,
+                run_id=run_id,
             )
 
         if stage == StageName.REVIEW:
@@ -464,4 +612,54 @@ class StageHandler:
         return StageResult(
             decision=StageDecision.FAIL,
             message=f"No handler exists for stage: {stage}",
+        )
+
+    async def resolve_reconciliation(
+        self,
+        db: AsyncSession,
+        run_id: UUID,
+        reconciliation_id: UUID,
+    ) -> StageResult:
+
+        result = await db.execute(
+            select(ReconciliationResult).where(
+                ReconciliationResult.id == reconciliation_id,
+                ReconciliationResult.run_id == run_id,
+            )
+        )
+
+        reconciliation = result.scalar_one_or_none()
+
+        if reconciliation is None:
+            return StageResult(
+                decision=StageDecision.FAIL,
+                message="Reconciliation result not found for this run.",
+            )
+
+        if reconciliation.status == "resolved":
+            return StageResult(
+                decision=StageDecision.COMPLETE,
+                message="Reconciliation conflict is already resolved.",
+                data={
+                    "reconciliation_id": str(
+                        reconciliation.id
+                    ),
+                    "status": reconciliation.status,
+                },
+            )
+
+        reconciliation.status = "resolved"
+
+        await db.commit()
+        await db.refresh(reconciliation)
+
+        return StageResult(
+            decision=StageDecision.COMPLETE,
+            message="Reconciliation conflict resolved.",
+            data={
+                "reconciliation_id": str(
+                    reconciliation.id
+                ),
+                "status": reconciliation.status,
+            },
         )

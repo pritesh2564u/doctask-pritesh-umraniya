@@ -56,3 +56,16 @@ async def get_project(
         )
 
     return project
+
+@router.get(
+    "",
+    response_model=list[ProjectResponse],
+)
+async def list_projects(
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Project).order_by(Project.created_at.desc())
+    )
+
+    return result.scalars().all()
