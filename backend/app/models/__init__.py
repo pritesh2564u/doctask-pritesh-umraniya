@@ -4,6 +4,7 @@ from app.models.project import Project
 from app.models.run import Run
 from app.models.stage import StageRun
 from app.models.evidence import Evidence
+from app.models.finding import Finding
 
 __all__ = [
     "Project",
@@ -12,4 +13,5 @@ __all__ = [
     "Run",
     "StageRun",
     "Evidence",
+    "Finding",
 ]
