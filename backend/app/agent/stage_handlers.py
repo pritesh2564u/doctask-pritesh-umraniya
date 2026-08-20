@@ -181,10 +181,11 @@ class StageHandler:
 
         if not findings:
             return StageResult(
-                decision=StageDecision.SKIP,
-                message="No potential delivery risks were identified.",
+                decision=StageDecision.COMPLETE,
+                message="Analysis completed. No potential delivery risks were identified.",
                 data={
                     "finding_count": 0,
+                    "findings": [],
                 },
             )
 
@@ -502,8 +503,12 @@ class StageHandler:
 
         if not findings:
             return StageResult(
-                decision=StageDecision.SKIP,
-                message="Nothing to commit.",
+                decision=StageDecision.COMPLETE,
+                message="Commit completed. There are no findings to commit.",
+                data={
+                    "committed": 0,
+                    "rejected": 0,
+                },
             )
 
         # NEVER commit while a human decision is missing.

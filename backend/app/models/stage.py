@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -53,5 +53,15 @@ class StageRun(Base):
 
     error: Mapped[str | None] = mapped_column(
         Text,
+        nullable=True,
+    )
+
+    message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    details: Mapped[dict | None] = mapped_column(
+        JSONB,
         nullable=True,
     )

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.run_service import RunService
-from app.agent.stages import StageName
+from app.agent.stages import StageName, StageStatus
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.run import Run
@@ -13,6 +13,7 @@ from app.models.stage import StageRun
 from app.agent.graph import build_graph
 from app.agent.decisions import StageDecision
 from app.agent.stage_handlers import StageHandler
+from app.models.reconciliation import ReconciliationResult
 
 router = APIRouter(
     prefix="/projects",
@@ -53,6 +54,45 @@ async def create_run(
         "current_stage": run.current_stage,
     }
 
+@router.get("/{project_id}/runs")
+async def get_project_runs(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify project exists.
+    result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+
+    project = result.scalar_one_or_none()
+
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    # Fetch all runs for this project.
+    result = await db.execute(
+        select(Run)
+        .where(Run.project_id == project_id)
+        .order_by(Run.created_at.desc())
+    )
+
+    runs = result.scalars().all()
+
+    return {
+        "project_id": str(project_id),
+        "runs": [
+            {
+                "run_id": str(run.id),
+                "status": run.status,
+                "current_stage": run.current_stage,
+                "created_at": run.created_at,
+            }
+            for run in runs
+        ],
+    }
 
 @router.get("/{project_id}/runs/{run_id}")
 async def get_run_status(
@@ -108,8 +148,66 @@ async def get_run_status(
                 "stage": stage.stage,
                 "status": stage.status,
                 "attempt": stage.attempt,
+                "message": stage.message,
+                "details": stage.details or {},
+                "started_at": (
+                    stage.started_at.isoformat()
+                    if stage.started_at
+                    else None
+                ),
+                "completed_at": (
+                    stage.completed_at.isoformat()
+                    if stage.completed_at
+                    else None
+                ),
+                "error": stage.error,
             }
             for stage in stages
+        ],
+    }
+
+@router.get("/{project_id}/runs/{run_id}/reconciliation")
+async def get_reconciliation(
+    project_id: UUID,
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify run belongs to project.
+    result = await db.execute(
+        select(Run).where(
+            Run.id == run_id,
+            Run.project_id == project_id,
+        )
+    )
+
+    run = result.scalar_one_or_none()
+
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Run not found",
+        )
+
+    result = await db.execute(
+        select(ReconciliationResult)
+        .where(
+            ReconciliationResult.run_id == run_id,
+        )
+        .order_by(ReconciliationResult.created_at)
+    )
+
+    conflicts = result.scalars().all()
+
+    return {
+        "run_id": str(run_id),
+        "conflicts": [
+            {
+                "id": str(conflict.id),
+                "conflict_type": conflict.conflict_type,
+                "status": conflict.status,
+                "description": conflict.description,
+            }
+            for conflict in conflicts
         ],
     }
 
@@ -165,7 +263,7 @@ async def resolve_reconciliation(
     db: AsyncSession = Depends(get_db),
 ):
     # --------------------------------------------------
-    # Verify that the run belongs to this project.
+    # Verify run belongs to project.
     # --------------------------------------------------
 
     result = await db.execute(
@@ -184,10 +282,7 @@ async def resolve_reconciliation(
         )
 
     # --------------------------------------------------
-    # Resolve the reconciliation result.
-    #
-    # The service also verifies reconciliation_id belongs
-    # to this run, so another run cannot resolve it.
+    # Resolve the requested reconciliation conflict.
     # --------------------------------------------------
 
     handler = StageHandler()
@@ -204,11 +299,114 @@ async def resolve_reconciliation(
             detail=result.message,
         )
 
+    # --------------------------------------------------
+    # Check whether any reconciliation conflicts remain.
+    # --------------------------------------------------
+
+    conflict_result = await db.execute(
+        select(ReconciliationResult).where(
+            ReconciliationResult.run_id == run_id,
+            ReconciliationResult.status == "open",
+        )
+    )
+
+    open_conflicts = conflict_result.scalars().all()
+
+    # --------------------------------------------------
+    # Other conflicts still need human resolution.
+    # Do not resume the workflow yet.
+    # --------------------------------------------------
+
+    if open_conflicts:
+        return {
+            "run_id": str(run_id),
+            "reconciliation_id": str(
+                reconciliation_id
+            ),
+            "status": result.data["status"],
+            "message": (
+                "Reconciliation conflict resolved. "
+                f"{len(open_conflicts)} conflict(s) still "
+                "require resolution."
+            ),
+            "workflow_resumed": False,
+            "remaining_conflicts": len(open_conflicts),
+        }
+
+    # --------------------------------------------------
+    # ALL reconciliation conflicts are now resolved.
+    #
+    # Re-open REVIEW so the executor can execute it again.
+    # --------------------------------------------------
+
+    review_result = await db.execute(
+        select(StageRun).where(
+            StageRun.run_id == run_id,
+            StageRun.stage == StageName.REVIEW,
+        )
+    )
+
+    review_stage = review_result.scalar_one_or_none()
+
+    if review_stage is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Review stage not found",
+        )
+
+    if review_stage.status == StageStatus.ESCALATED:
+        review_stage.status = StageStatus.PENDING
+
+    run.status = "running"
+
+    await db.commit()
+
+    # --------------------------------------------------
+    # Resume the persisted workflow.
+    # --------------------------------------------------
+
+    try:
+        workflow_result = await workflow_graph.ainvoke(
+            {
+                "run_id": run_id,
+                "project_id": project_id,
+            }
+        )
+
+    except Exception as exc:
+        return {
+            "run_id": str(run_id),
+            "reconciliation_id": str(
+                reconciliation_id
+            ),
+            "status": result.data["status"],
+            "message": (
+                "Reconciliation conflict resolved, "
+                "but workflow resume failed."
+            ),
+            "workflow_resumed": False,
+            "workflow_error": str(exc),
+        }
+
     return {
         "run_id": str(run_id),
         "reconciliation_id": str(
             reconciliation_id
         ),
         "status": result.data["status"],
-        "message": result.message,
+        "message": (
+            "Reconciliation conflict resolved and "
+            "workflow resumed."
+        ),
+        "workflow_resumed": True,
+        "workflow_decision": workflow_result.get(
+            "decision"
+        ),
+        "workflow_message": workflow_result.get(
+            "message"
+        ),
+        "workflow_data": workflow_result.get(
+            "data",
+            {},
+        ),
     }

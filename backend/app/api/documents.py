@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.documents.registry import create_default_registry
 from app.documents.service import DocumentService
 from app.models.project import Project
+from app.models.document import Document
 
 router = APIRouter(
     prefix="/projects",
@@ -111,3 +112,80 @@ async def upload_document(
             temp_path.unlink(missing_ok=True)
 
         await file.close()
+
+@router.get("/{project_id}/documents")
+async def list_documents(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Document)
+        .where(Document.project_id == project_id)
+        .order_by(Document.created_at.desc())
+    )
+
+    documents = result.scalars().all()
+
+    return {
+        "documents": [
+            {
+                "id": str(document.id),
+                "filename": document.filename,
+                "mime_type": document.mime_type,
+                "content_hash": document.content_hash,
+                "document_type": document.document_type,
+                "created_at": document.created_at,
+            }
+            for document in documents
+        ],
+    }
+
+@router.delete(
+    "/{project_id}/documents/{document_id}",
+    status_code=204,
+)
+async def delete_document(
+    project_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    # --------------------------------------------------
+    # Verify document belongs to project.
+    # --------------------------------------------------
+
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.project_id == project_id,
+        )
+    )
+
+    document = result.scalar_one_or_none()
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    # --------------------------------------------------
+    # Remove physical file.
+    # --------------------------------------------------
+
+    if document.storage_path:
+        Path(
+            document.storage_path
+        ).unlink(missing_ok=True)
+
+    # --------------------------------------------------
+    # Remove database record.
+    #
+    # Dependent chunks should be removed through the
+    # database FK cascade.
+    # --------------------------------------------------
+
+    await db.delete(document)
+
+    await db.commit()
+
+    return None

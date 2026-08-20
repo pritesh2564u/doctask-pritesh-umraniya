@@ -28,13 +28,6 @@ class WorkflowExecutor:
         db: AsyncSession,
         run_id: UUID,
     ) -> StageResult:
-        """
-        Execute the next available stage for a run.
-
-        The database is the source of truth. If the process is
-        restarted, this method determines the next stage from
-        persisted StageRun state instead of starting over.
-        """
 
         run = await self.run_service.get_run(
             db,
@@ -46,24 +39,13 @@ class WorkflowExecutor:
                 f"Run {run_id} does not exist"
             )
 
-        # --------------------------------------------------
-        # Find the next stage from persisted state.
-        # --------------------------------------------------
-
         stage = await self.get_next_stage(
             db,
             run_id,
         )
 
-        # --------------------------------------------------
-        # No executable stage remains.
-        #
-        # This can happen when the workflow has already
-        # completed or when an earlier stage requires
-        # external intervention.
-        # --------------------------------------------------
-
         if stage is None:
+
             if run.status == "escalated":
                 return StageResult(
                     decision=StageDecision.ESCALATE,
@@ -91,9 +73,7 @@ class WorkflowExecutor:
             )
 
         # --------------------------------------------------
-        # Mark the stage as running BEFORE executing it.
-        #
-        # This is important for crash/restart recovery.
+        # Start stage
         # --------------------------------------------------
 
         await self.run_service.start_stage(
@@ -114,7 +94,7 @@ class WorkflowExecutor:
             )
 
         # --------------------------------------------------
-        # Execute the actual stage handler.
+        # Execute stage
         # --------------------------------------------------
 
         result = await self.handler.execute(
@@ -131,14 +111,11 @@ class WorkflowExecutor:
         if result.decision == StageDecision.COMPLETE:
 
             stage_run.status = StageStatus.COMPLETED
-            run.status = "running"
 
-            # --------------------------------------------------
-            # Determine whether another persisted stage remains.
-            #
-            # We do this AFTER marking the current stage completed.
-            # Therefore get_next_stage() will skip the current stage.
-            # --------------------------------------------------
+            stage_run.message = result.message
+            stage_run.details = result.data or {}
+
+            run.status = "running"
 
             next_stage = await self.get_next_stage(
                 db,
@@ -159,11 +136,16 @@ class WorkflowExecutor:
                 },
             )
 
+            stage_run.details = result.data or {}
+
         # --------------------------------------------------
         # RETRY
         # --------------------------------------------------
 
         elif result.decision == StageDecision.RETRY:
+
+            stage_run.message = result.message
+            stage_run.details = result.data or {}
 
             if stage_run.attempt >= MAX_STAGE_ATTEMPTS:
 
@@ -173,6 +155,8 @@ class WorkflowExecutor:
                     f"Maximum retry attempts ({MAX_STAGE_ATTEMPTS}) "
                     f"reached. Last error: {result.message}"
                 )
+
+                stage_run.message = stage_run.error
 
                 run.status = "failed"
 
@@ -185,6 +169,8 @@ class WorkflowExecutor:
                         "max_attempts": MAX_STAGE_ATTEMPTS,
                     },
                 )
+
+                stage_run.details = result.data or {}
 
             else:
 
@@ -200,12 +186,11 @@ class WorkflowExecutor:
         elif result.decision == StageDecision.SKIP:
 
             stage_run.status = StageStatus.SKIPPED
-            run.status = "running"
 
-            # --------------------------------------------------
-            # A skipped stage also needs to report whether the
-            # entire workflow is now complete.
-            # --------------------------------------------------
+            stage_run.message = result.message
+            stage_run.details = result.data or {}
+
+            run.status = "running"
 
             next_stage = await self.get_next_stage(
                 db,
@@ -226,6 +211,8 @@ class WorkflowExecutor:
                 },
             )
 
+            stage_run.details = result.data or {}
+
         # --------------------------------------------------
         # ESCALATE
         # --------------------------------------------------
@@ -233,6 +220,10 @@ class WorkflowExecutor:
         elif result.decision == StageDecision.ESCALATE:
 
             stage_run.status = StageStatus.ESCALATED
+
+            stage_run.message = result.message
+            stage_run.details = result.data or {}
+
             run.status = "escalated"
 
         # --------------------------------------------------
@@ -242,12 +233,15 @@ class WorkflowExecutor:
         elif result.decision == StageDecision.FAIL:
 
             stage_run.status = StageStatus.FAILED
+
+            stage_run.message = result.message
+            stage_run.details = result.data or {}
             stage_run.error = result.message
 
             run.status = "failed"
 
         # --------------------------------------------------
-        # Persist all state changes.
+        # Persist state
         # --------------------------------------------------
 
         await db.commit()
@@ -259,14 +253,6 @@ class WorkflowExecutor:
         db: AsyncSession,
         run_id: UUID,
     ) -> StageName | None:
-        """
-        Determine the next stage from persisted database state.
-
-        Completed/skipped stages are never executed again.
-
-        REVIEW is special because it can be escalated to a human
-        and later resumed after human decisions.
-        """
 
         for stage in STAGE_ORDER:
 
@@ -279,40 +265,23 @@ class WorkflowExecutor:
             if stage_run is None:
                 continue
 
-            # --------------------------------------------------
-            # Pending stage
-            # --------------------------------------------------
-
+            # Pending
             if stage_run.status == StageStatus.PENDING:
                 return stage
 
-            # --------------------------------------------------
-            # Running stage
-            # --------------------------------------------------
-
+            # Running
             if stage_run.status == StageStatus.RUNNING:
-                # A process may have been killed while this stage
-                # was running. Re-running it allows recovery.
                 return stage
 
-            # --------------------------------------------------
-            # Escalated REVIEW stage
-            # --------------------------------------------------
-
+            # Escalated
             if stage_run.status == StageStatus.ESCALATED:
                 return None
 
-            # --------------------------------------------------
-            # Failed stage
-            # --------------------------------------------------
-
+            # Failed
             if stage_run.status == StageStatus.FAILED:
                 return None
 
-            # --------------------------------------------------
             # Completed / skipped
-            # --------------------------------------------------
-
             if stage_run.status in {
                 StageStatus.COMPLETED,
                 StageStatus.SKIPPED,
