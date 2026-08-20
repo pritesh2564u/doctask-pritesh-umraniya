@@ -138,11 +138,37 @@ async def get_run_status(
         )
     )
 
+    total_input_tokens = sum(
+        stage.input_tokens or 0
+        for stage in stages
+    )
+
+    total_output_tokens = sum(
+        stage.output_tokens or 0
+        for stage in stages
+    )
+
+    total_tokens = sum(
+        stage.total_tokens or 0
+        for stage in stages
+    )
+
+    total_cost_usd = sum(
+        float(stage.estimated_cost_usd or 0)
+        for stage in stages
+    )
+
     return {
         "run_id": str(run.id),
         "project_id": str(run.project_id),
         "status": run.status,
         "current_stage": run.current_stage,
+        "usage": {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": total_cost_usd,
+        },
         "stages": [
             {
                 "stage": stage.stage,
@@ -159,6 +185,13 @@ async def get_run_status(
                     stage.completed_at.isoformat()
                     if stage.completed_at
                     else None
+                ),
+                "duration_ms": stage.duration_ms,
+                "input_tokens": stage.input_tokens or 0,
+                "output_tokens": stage.output_tokens or 0,
+                "total_tokens": stage.total_tokens or 0,
+                "estimated_cost_usd": float(
+                    stage.estimated_cost_usd or 0
                 ),
                 "error": stage.error,
             }

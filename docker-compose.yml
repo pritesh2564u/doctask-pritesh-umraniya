@@ -42,5 +42,43 @@ services:
         ports:
             - "8000:8000"
 
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+
+        container_name: doctask-frontend
+        restart: unless-stopped
+
+        depends_on:
+            backend:
+                condition: service_started
+
+        ports:
+            - "5173:80"
+
+    mcp:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+
+        container_name: doctask-mcp
+        restart: unless-stopped
+
+        env_file:
+            - ./backend/.env
+
+        environment:
+            DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/doctask
+
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+        ports:
+            - "8001:8000"
+
+        command: ["python", "-m", "app.mcp.server"]
+
 volumes:
     postgres_data:

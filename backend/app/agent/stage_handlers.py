@@ -125,11 +125,22 @@ class StageHandler:
 
         findings = []
 
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+
         for chunk in chunks:
 
-            analysis = await self.analysis_service.analyze(
+            analysis_result = await self.analysis_service.analyze(
                 chunk.text
             )
+
+            analysis = analysis_result.finding
+            usage = analysis_result.usage
+
+            input_tokens += usage.input_tokens
+            output_tokens += usage.output_tokens
+            total_tokens += usage.total_tokens
 
             if not analysis.is_risk:
                 continue
@@ -182,10 +193,18 @@ class StageHandler:
         if not findings:
             return StageResult(
                 decision=StageDecision.COMPLETE,
-                message="Analysis completed. No potential delivery risks were identified.",
+                message=(
+                    "Analysis completed. "
+                    "No potential delivery risks were identified."
+                ),
                 data={
                     "finding_count": 0,
                     "findings": [],
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                    },
                 },
             )
 
@@ -197,6 +216,11 @@ class StageHandler:
             data={
                 "findings": findings,
                 "finding_count": len(findings),
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                },
             },
         )
 

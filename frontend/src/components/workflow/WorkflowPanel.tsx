@@ -13,6 +13,7 @@ import {
 
 import { useCreateRun, useExecuteRun, useRun } from "../../hooks/useRun";
 import type { StageStatus } from "../../types/api";
+import UsageSummary from "./UsageSummary";
 
 interface WorkflowPanelProps {
     projectId: string;
@@ -235,235 +236,310 @@ export default function WorkflowPanel({
             {/* Workflow stages */}
             {run && (
                 <div className="mt-6">
-                    <div className="overflow-hidden rounded-xl border border-slate-200">
-                        {run.stages.map((stage, index) => {
-                            const isLast = index === run.stages.length - 1;
+                    {run.usage && <UsageSummary usage={run.usage} />}
 
-                            const hasDetails =
-                                Boolean(stage.message) ||
-                                Boolean(
-                                    stage.details &&
-                                    Object.keys(stage.details).length > 0,
-                                ) ||
-                                Boolean(stage.error) ||
-                                Boolean(stage.started_at) ||
-                                Boolean(stage.completed_at);
+                    <div className="mt-6">
+                        <div className="overflow-hidden rounded-xl border border-slate-200">
+                            {run.stages.map((stage, index) => {
+                                const isLast = index === run.stages.length - 1;
 
-                            const isExpanded = expandedStage === stage.stage;
+                                const hasUsage =
+                                    (stage.total_tokens ?? 0) > 0 ||
+                                    (stage.duration_ms ?? 0) > 0 ||
+                                    (stage.estimated_cost_usd ?? 0) > 0;
 
-                            return (
-                                <div
-                                    key={stage.stage}
-                                    className={
-                                        !isLast
-                                            ? "border-b border-slate-100"
-                                            : ""
-                                    }
-                                >
-                                    {/* Stage header */}
-                                    <button
-                                        type="button"
-                                        disabled={!hasDetails}
-                                        onClick={() => {
-                                            if (!hasDetails) {
-                                                return;
-                                            }
+                                const hasDetails =
+                                    Boolean(stage.message) ||
+                                    Boolean(
+                                        stage.details &&
+                                        Object.keys(stage.details).length > 0,
+                                    ) ||
+                                    Boolean(stage.error) ||
+                                    Boolean(stage.started_at) ||
+                                    Boolean(stage.completed_at) ||
+                                    hasUsage;
 
-                                            setExpandedStage(
-                                                isExpanded ? null : stage.stage,
-                                            );
-                                        }}
-                                        className={`flex w-full items-center gap-4 px-5 py-4 text-left ${
-                                            hasDetails
-                                                ? "cursor-pointer transition hover:bg-slate-50"
-                                                : "cursor-default"
-                                        }`}
+                                const isExpanded =
+                                    expandedStage === stage.stage;
+
+                                return (
+                                    <div
+                                        key={stage.stage}
+                                        className={
+                                            !isLast
+                                                ? "border-b border-slate-100"
+                                                : ""
+                                        }
                                     >
-                                        <StageIcon status={stage.status} />
+                                        {/* Stage header */}
+                                        <button
+                                            type="button"
+                                            disabled={!hasDetails}
+                                            onClick={() => {
+                                                if (!hasDetails) {
+                                                    return;
+                                                }
 
-                                        <div className="min-w-0 flex-1">
-                                            <p className="text-sm font-medium text-slate-900">
-                                                {stageLabels[stage.stage]}
-                                            </p>
-
-                                            <p className="mt-0.5 text-xs capitalize text-slate-500">
-                                                {stage.status}
-
-                                                {stage.attempt > 0 &&
-                                                    ` · Attempt ${stage.attempt}`}
-                                            </p>
-                                        </div>
-
-                                        <span
-                                            className={`text-xs font-medium ${
-                                                stage.status === "completed"
-                                                    ? "text-emerald-600"
-                                                    : stage.status === "running"
-                                                      ? "text-blue-600"
-                                                      : stage.status ===
-                                                          "failed"
-                                                        ? "text-red-600"
-                                                        : stage.status ===
-                                                            "escalated"
-                                                          ? "text-amber-600"
-                                                          : "text-slate-500"
+                                                setExpandedStage(
+                                                    isExpanded
+                                                        ? null
+                                                        : stage.stage,
+                                                );
+                                            }}
+                                            className={`flex w-full items-center gap-4 px-5 py-4 text-left ${
+                                                hasDetails
+                                                    ? "cursor-pointer transition hover:bg-slate-50"
+                                                    : "cursor-default"
                                             }`}
                                         >
-                                            {formatStatus(stage.status)}
-                                        </span>
+                                            <StageIcon status={stage.status} />
 
-                                        {hasDetails && (
-                                            <ChevronDown
-                                                size={18}
-                                                className={`shrink-0 text-slate-400 transition-transform ${
-                                                    isExpanded
-                                                        ? "rotate-180"
-                                                        : ""
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-medium text-slate-900">
+                                                    {stageLabels[stage.stage]}
+                                                </p>
+
+                                                <p className="mt-0.5 text-xs capitalize text-slate-500">
+                                                    {stage.status}
+
+                                                    {stage.attempt > 0 &&
+                                                        ` · Attempt ${stage.attempt}`}
+                                                </p>
+                                            </div>
+
+                                            <span
+                                                className={`text-xs font-medium ${
+                                                    stage.status === "completed"
+                                                        ? "text-emerald-600"
+                                                        : stage.status ===
+                                                            "running"
+                                                          ? "text-blue-600"
+                                                          : stage.status ===
+                                                              "failed"
+                                                            ? "text-red-600"
+                                                            : stage.status ===
+                                                                "escalated"
+                                                              ? "text-amber-600"
+                                                              : "text-slate-500"
                                                 }`}
-                                            />
-                                        )}
-                                    </button>
+                                            >
+                                                {formatStatus(stage.status)}
+                                            </span>
 
-                                    {/* Stage details */}
-                                    {isExpanded && (
-                                        <div className="border-t border-slate-100 bg-slate-50 px-5 py-5 pl-[68px]">
-                                            {/* Message */}
-                                            {stage.message && (
-                                                <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                                        Result
-                                                    </p>
-
-                                                    <p className="mt-1 text-sm leading-6 text-slate-700">
-                                                        {stage.message}
-                                                    </p>
-                                                </div>
+                                            {hasDetails && (
+                                                <ChevronDown
+                                                    size={18}
+                                                    className={`shrink-0 text-slate-400 transition-transform ${
+                                                        isExpanded
+                                                            ? "rotate-180"
+                                                            : ""
+                                                    }`}
+                                                />
                                             )}
+                                        </button>
 
-                                            {/* Details */}
-                                            {stage.details &&
-                                                Object.keys(stage.details)
-                                                    .length > 0 && (
-                                                    <div className="mt-5">
+                                        {/* Stage details */}
+                                        {isExpanded && (
+                                            <div className="border-t border-slate-100 bg-slate-50 px-5 py-5 pl-[68px]">
+                                                {/* Message */}
+                                                {stage.message && (
+                                                    <div>
                                                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                                            Stage details
+                                                            Result
                                                         </p>
 
-                                                        <div className="mt-3 space-y-3">
-                                                            {Object.entries(
-                                                                stage.details,
-                                                            ).map(
-                                                                ([
-                                                                    key,
-                                                                    value,
-                                                                ]) => (
-                                                                    <div
-                                                                        key={
-                                                                            key
-                                                                        }
-                                                                        className="rounded-lg border border-slate-200 bg-white p-3"
-                                                                    >
-                                                                        <p className="text-xs font-medium text-slate-500">
-                                                                            {formatDetailKey(
-                                                                                key,
-                                                                            )}
-                                                                        </p>
+                                                        <p className="mt-1 text-sm leading-6 text-slate-700">
+                                                            {stage.message}
+                                                        </p>
+                                                    </div>
+                                                )}
 
-                                                                        {typeof value ===
-                                                                            "string" ||
-                                                                        typeof value ===
-                                                                            "number" ||
-                                                                        typeof value ===
-                                                                            "boolean" ||
-                                                                        value ===
-                                                                            null ? (
-                                                                            <p className="mt-1 text-sm text-slate-700">
-                                                                                {formatDetailValue(
-                                                                                    value,
+                                                {/* Details */}
+                                                {stage.details &&
+                                                    Object.keys(stage.details)
+                                                        .length > 0 && (
+                                                        <div className="mt-5">
+                                                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                                                Stage details
+                                                            </p>
+
+                                                            <div className="mt-3 space-y-3">
+                                                                {Object.entries(
+                                                                    stage.details,
+                                                                ).map(
+                                                                    ([
+                                                                        key,
+                                                                        value,
+                                                                    ]) => (
+                                                                        <div
+                                                                            key={
+                                                                                key
+                                                                            }
+                                                                            className="rounded-lg border border-slate-200 bg-white p-3"
+                                                                        >
+                                                                            <p className="text-xs font-medium text-slate-500">
+                                                                                {formatDetailKey(
+                                                                                    key,
                                                                                 )}
                                                                             </p>
-                                                                        ) : (
-                                                                            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                                                                                {formatDetailValue(
-                                                                                    value,
-                                                                                )}
-                                                                            </pre>
-                                                                        )}
-                                                                    </div>
-                                                                ),
-                                                            )}
+
+                                                                            {typeof value ===
+                                                                                "string" ||
+                                                                            typeof value ===
+                                                                                "number" ||
+                                                                            typeof value ===
+                                                                                "boolean" ||
+                                                                            value ===
+                                                                                null ? (
+                                                                                <p className="mt-1 text-sm text-slate-700">
+                                                                                    {formatDetailValue(
+                                                                                        value,
+                                                                                    )}
+                                                                                </p>
+                                                                            ) : (
+                                                                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                                                                                    {formatDetailValue(
+                                                                                        value,
+                                                                                    )}
+                                                                                </pre>
+                                                                            )}
+                                                                        </div>
+                                                                    ),
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                {/* Error */}
+                                                {stage.error && (
+                                                    <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wide text-red-600">
+                                                            Error
+                                                        </p>
+
+                                                        <p className="mt-1 text-sm leading-6 text-red-700">
+                                                            {stage.error}
+                                                        </p>
+                                                    </div>
+                                                )}
+
+                                                {hasUsage && (
+                                                    <div className="mt-5">
+                                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                                            Usage & cost
+                                                        </p>
+
+                                                        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                                                <p className="text-xs font-medium text-slate-500">
+                                                                    Duration
+                                                                </p>
+
+                                                                <p className="mt-1 text-sm font-semibold text-slate-800">
+                                                                    {stage.duration_ms !=
+                                                                    null
+                                                                        ? `${(stage.duration_ms / 1000).toFixed(2)}s`
+                                                                        : "—"}
+                                                                </p>
+                                                            </div>
+
+                                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                                                <p className="text-xs font-medium text-slate-500">
+                                                                    Input
+                                                                </p>
+
+                                                                <p className="mt-1 text-sm font-semibold text-slate-800">
+                                                                    {(
+                                                                        stage.input_tokens ??
+                                                                        0
+                                                                    ).toLocaleString()}
+                                                                </p>
+                                                            </div>
+
+                                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                                                <p className="text-xs font-medium text-slate-500">
+                                                                    Output
+                                                                </p>
+
+                                                                <p className="mt-1 text-sm font-semibold text-slate-800">
+                                                                    {(
+                                                                        stage.output_tokens ??
+                                                                        0
+                                                                    ).toLocaleString()}
+                                                                </p>
+                                                            </div>
+
+                                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                                                <p className="text-xs font-medium text-slate-500">
+                                                                    Cost
+                                                                </p>
+
+                                                                <p className="mt-1 text-sm font-semibold text-slate-800">
+                                                                    {stage.estimated_cost_usd
+                                                                        ? `$${stage.estimated_cost_usd.toFixed(6)}`
+                                                                        : "$0.00"}
+                                                                </p>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}
 
-                                            {/* Error */}
-                                            {stage.error && (
-                                                <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4">
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-red-600">
-                                                        Error
-                                                    </p>
+                                                {/* Timing */}
+                                                {(stage.started_at ||
+                                                    stage.completed_at) && (
+                                                    <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-400">
+                                                        {stage.started_at && (
+                                                            <span>
+                                                                Started:{" "}
+                                                                {new Date(
+                                                                    stage.started_at,
+                                                                ).toLocaleString()}
+                                                            </span>
+                                                        )}
 
-                                                    <p className="mt-1 text-sm leading-6 text-red-700">
-                                                        {stage.error}
-                                                    </p>
-                                                </div>
-                                            )}
+                                                        {stage.completed_at && (
+                                                            <span>
+                                                                Completed:{" "}
+                                                                {new Date(
+                                                                    stage.completed_at,
+                                                                ).toLocaleString()}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
 
-                                            {/* Timing */}
-                                            {(stage.started_at ||
-                                                stage.completed_at) && (
-                                                <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-400">
-                                                    {stage.started_at && (
-                                                        <span>
-                                                            Started:{" "}
-                                                            {new Date(
-                                                                stage.started_at,
-                                                            ).toLocaleString()}
-                                                        </span>
-                                                    )}
+                        {run.status === "completed" && (
+                            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                                <p className="text-sm font-medium text-emerald-800">
+                                    Workflow completed successfully.
+                                </p>
+                            </div>
+                        )}
 
-                                                    {stage.completed_at && (
-                                                        <span>
-                                                            Completed:{" "}
-                                                            {new Date(
-                                                                stage.completed_at,
-                                                            ).toLocaleString()}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
+                        {run.status === "escalated" && (
+                            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+                                <p className="text-sm font-medium text-amber-800">
+                                    Human review is required before the workflow
+                                    can continue.
+                                </p>
+                            </div>
+                        )}
+
+                        {run.status === "failed" && (
+                            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+                                <p className="text-sm font-medium text-red-800">
+                                    The workflow failed. Please review the stage
+                                    status and try again.
+                                </p>
+                            </div>
+                        )}
                     </div>
-
-                    {run.status === "completed" && (
-                        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                            <p className="text-sm font-medium text-emerald-800">
-                                Workflow completed successfully.
-                            </p>
-                        </div>
-                    )}
-
-                    {run.status === "escalated" && (
-                        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
-                            <p className="text-sm font-medium text-amber-800">
-                                Human review is required before the workflow can
-                                continue.
-                            </p>
-                        </div>
-                    )}
-
-                    {run.status === "failed" && (
-                        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
-                            <p className="text-sm font-medium text-red-800">
-                                The workflow failed. Please review the stage
-                                status and try again.
-                            </p>
-                        </div>
-                    )}
                 </div>
             )}
         </section>

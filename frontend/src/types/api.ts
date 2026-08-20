@@ -48,7 +48,19 @@ export interface StageRun {
     details?: Record<string, unknown>;
     started_at?: string | null;
     completed_at?: string | null;
+    duration_ms?: number | null;
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    estimated_cost_usd?: number;
     error?: string | null;
+}
+
+export interface RunUsage {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    estimated_cost_usd: number;
 }
 
 export interface Run {
@@ -56,6 +68,7 @@ export interface Run {
     project_id: string;
     status: string;
     current_stage: StageName;
+    usage: RunUsage;
     stages: StageRun[];
 }
 

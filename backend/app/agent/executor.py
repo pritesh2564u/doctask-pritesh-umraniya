@@ -10,9 +10,17 @@ from app.agent.stages import (
     StageName,
     StageStatus,
 )
+from datetime import datetime, timezone
+from decimal import Decimal
 
 MAX_STAGE_ATTEMPTS = 3
-
+# USD per 1 million tokens.
+#
+# Configure these according to the Groq model used by the project.
+# These defaults are intentionally zero so the system never invents
+# a monetary cost when pricing has not been configured.
+INPUT_COST_PER_1M = Decimal("0.075")
+OUTPUT_COST_PER_1M = Decimal("0.30")
 
 class WorkflowExecutor:
 
@@ -94,8 +102,10 @@ class WorkflowExecutor:
             )
 
         # --------------------------------------------------
-        # Execute stage
+        # Execute stage + usage tracking
         # --------------------------------------------------
+
+        stage_run.started_at = datetime.now(timezone.utc)
 
         result = await self.handler.execute(
             db=db,
@@ -103,6 +113,55 @@ class WorkflowExecutor:
             run_id=run_id,
             stage=stage,
         )
+
+        stage_run.completed_at = datetime.now(timezone.utc)
+
+        stage_run.duration_ms = int(
+            (
+                stage_run.completed_at
+                - stage_run.started_at
+            ).total_seconds()
+            * 1000
+        )
+
+        usage = (result.data or {}).get(
+            "usage",
+            {},
+        )
+
+        input_tokens = int(
+            usage.get("input_tokens", 0)
+        )
+
+        output_tokens = int(
+            usage.get("output_tokens", 0)
+        )
+
+        total_tokens = int(
+            usage.get(
+                "total_tokens",
+                input_tokens + output_tokens,
+            )
+        )
+
+        input_cost = (
+            Decimal(input_tokens)
+            / Decimal("1000000")
+            * INPUT_COST_PER_1M
+        )
+
+        output_cost = (
+            Decimal(output_tokens)
+            / Decimal("1000000")
+            * OUTPUT_COST_PER_1M
+        )
+
+        estimated_cost = input_cost + output_cost
+
+        stage_run.input_tokens = input_tokens
+        stage_run.output_tokens = output_tokens
+        stage_run.total_tokens = total_tokens
+        stage_run.estimated_cost_usd = estimated_cost
 
         # --------------------------------------------------
         # COMPLETE
