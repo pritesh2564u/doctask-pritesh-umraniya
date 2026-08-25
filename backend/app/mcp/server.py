@@ -19,10 +19,16 @@ from app.models.run import Run
 from app.models.stage import StageRun
 
 
-mcp = FastMCP("DocTask")
+mcp = FastMCP(
+    "DocTask",
+    host="0.0.0.0",
+    port=8000,
+)
 
 run_service = RunService()
-workflow_graph = build_graph()
+workflow_graph = build_graph(
+    session_factory=AsyncSessionLocal,
+)
 stage_handler = StageHandler()
 
 
@@ -601,8 +607,10 @@ async def list_project_runs(
             }
         )
 
-
 if __name__ == "__main__":
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 8000
+
     mcp.run(
         transport="streamable-http",
     )

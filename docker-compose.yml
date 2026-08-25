@@ -70,6 +70,8 @@ services:
 
         environment:
             DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/doctask
+            FASTMCP_HOST: 0.0.0.0
+            FASTMCP_PORT: 8000
 
         depends_on:
             postgres:
