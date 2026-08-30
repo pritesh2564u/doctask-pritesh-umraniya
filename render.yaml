@@ -12,9 +12,9 @@ services:
         protocol: HTTP
     envVars:
       - key: DATABASE_URL
-        sync: false
+        value: ""
       - key: GROQ_API_KEY
-        sync: false
+        value: ""
       - key: GROQ_MODEL
         value: openai/gpt-oss-20b
         
