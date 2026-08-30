@@ -27,6 +27,3 @@ services:
         value: https://doctask-backend.onrender.com
       - key: NODE_ENV
         value: production
-    depends:
-      - type: web
-        name: doctask-backend
