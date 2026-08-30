@@ -12,7 +12,7 @@ services:
         protocol: HTTP
     envVars:
       - key: DATABASE_URL
-        value: ${DATABASE_URL}
+        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
